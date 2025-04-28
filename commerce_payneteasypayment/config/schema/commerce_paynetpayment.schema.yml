@@ -1,0 +1,46 @@
+commerce_payment.commerce_payment_gateway.plugin.paynetpayment_offsite:
+  type: commerce_payment_gateway_configuration
+  mapping:
+    login:
+      type: string
+      label: 'Login'
+    control_key:
+      type: string
+      label: 'Control key'
+    endpoint_id:
+      type: string
+      label: 'Endpoint ID'
+    logging:
+      type: boolean
+      label: 'Logging'
+    live_url:
+      type: string
+      label: 'Gateway url (LIVE)'
+    sandbox_url:
+      type: string
+      label: 'Gateway url (SANDBOX)'
+
+commerce_payment.commerce_payment_gateway.plugin.paynetpayment_onsite:
+  type: commerce_payment_gateway_configuration
+  mapping:
+    login:
+      type: string
+      label: 'Login'
+    control_key:
+      type: string
+      label: 'Control key'
+    endpoint_id:
+      type: string
+      label: 'Endpoint ID'
+    logging:
+      type: boolean
+      label: 'Logging'
+    three_d_secure:
+      type: boolean
+      label: '3D Secure'
+    live_url:
+      type: string
+      label: 'Gateway url (LIVE)'
+    sandbox_url:
+      type: string
+      label: 'Gateway url (SANDBOX)'

@@ -1,0 +1,12 @@
+name: 'Payneteasy Payment Plugin'
+type: module
+description: 'Payneteasy Payment Plugin.'
+package: Payneteasy
+core: 8.x
+core_version_requirement: ^8 || ^9 || ^10
+configure: commerce_payment.configuration
+hidden: false
+dependencies:
+  - commerce:commerce_payment
+  - commerce:commerce
+version: '1.0.0'
