@@ -1,2 +1,1 @@
-# php-plugin-drupal
-# Payneteasy plugin for Drupal
+# [Documentation in English](https://github.com/annihilatoratm/drupal-doc/blob/main/documentation/doc-eng.md)
