@@ -8,6 +8,7 @@ use Drupal\commerce_payment\CreditCard;
 use Drupal\commerce_payment\Entity\PaymentInterface;
 use Drupal\commerce_payment\Entity\PaymentMethodInterface;
 use Drupal\commerce_payment\Exception\HardDeclineException;
+use Drupal\commerce_payment\Exception\PaymentGatewayException;
 use Drupal\commerce_payment\PaymentMethodTypeManager;
 use Drupal\commerce_payment\PaymentTypeManager;
 use Drupal\commerce_payment\Plugin\Commerce\PaymentGateway\OnsitePaymentGatewayBase;
@@ -306,15 +307,24 @@ class Onsite extends OnsitePaymentGatewayBase implements OnsiteInterface
         $order = $payment->getOrder();
         $orderId = $order->id();
 
-        $status = $this->getPaymentStatus($orderId);
+        try {
+            $status = $this->getPaymentStatus($orderId);
+        } catch (PaynetEasyException $e) {
+            throw new PaymentGatewayException('The payment could not be processed. Please try again or use another payment method.');
+        }
+        $remoteStatus = trim($status['status'] ?? '');
 
-        if (trim($status['status']) == 'processing') {
+        if ($remoteStatus == 'processing') {
             $payment->setState('authorization');
             if ($this->configuration['three_d_secure']) {
                 echo $status['html'];
             }
-        } elseif (trim($status['status']) == 'approved') {
+        } elseif ($remoteStatus == 'approved') {
             $payment->setState('completed');
+        } elseif (in_array($remoteStatus, ['declined', 'filtered'], true)) {
+            throw new HardDeclineException('The payment was declined. Please use another payment method.');
+        } else {
+            throw new PaymentGatewayException('The payment could not be processed. Please try again or use another payment method.');
         }
         $payment->setRemoteId($status['paynet-order-id']);
         $payment->setAvsResponseCode('A');
