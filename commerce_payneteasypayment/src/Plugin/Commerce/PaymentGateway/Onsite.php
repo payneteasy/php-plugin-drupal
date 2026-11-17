@@ -339,7 +339,7 @@ class Onsite extends OnsitePaymentGatewayBase implements OnsiteInterface
     /**
      * {@inheritdoc}
      */
-    public function capturePayment(PaymentInterface $payment, Price $amount = NULL)
+    public function capturePayment(PaymentInterface $payment, ?Price $amount = NULL)
     {
         $this->assertPaymentState($payment, ['authorization']);
         $amount = $amount ?: $payment->getAmount();
@@ -368,7 +368,7 @@ class Onsite extends OnsitePaymentGatewayBase implements OnsiteInterface
     /**
      * {@inheritdoc}
      */
-    public function refundPayment(PaymentInterface $payment, Price $amount = NULL)
+    public function refundPayment(PaymentInterface $payment, ?Price $amount = NULL)
     {
         $this->setPayneteasyLogger();
         $this->logger->setOption('additionalCommonText', 'refundPayment-' . rand(1111, 9999));
