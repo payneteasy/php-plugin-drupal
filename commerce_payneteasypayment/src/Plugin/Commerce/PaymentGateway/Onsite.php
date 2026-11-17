@@ -315,10 +315,14 @@ class Onsite extends OnsitePaymentGatewayBase implements OnsiteInterface
         $remoteStatus = trim($status['status'] ?? '');
 
         if ($remoteStatus == 'processing') {
-            $payment->setState('authorization');
-            if ($this->configuration['three_d_secure']) {
+            // "processing" is not a final PaynetEasy status: never let checkout
+            // place the order on it. The customer may resubmit once the gateway
+            // reports a final status.
+            if ($this->configuration['three_d_secure'] && !empty($status['html'])) {
                 echo $status['html'];
             }
+            \Drupal::messenger()->addWarning($this->t('Your payment is still being processed. Please wait a moment and submit your order again without re-entering your card details.'));
+            throw new PaymentGatewayException('PaynetEasy payment for order ' . $orderId . ' is still processing.');
         } elseif ($remoteStatus == 'approved') {
             $payment->setState('completed');
         } elseif (in_array($remoteStatus, ['declined', 'filtered'], true)) {

@@ -217,15 +217,10 @@ class PaynetpaymentOffsite extends OffsitePaymentGatewayBase
             ]);
             $message = $this->t('Your payment was successful with Order id : @orderid has been received at : @date', ['@orderid' => $order->id(), '@date' => date("d-m-Y H:i:s", $requestTime)]);
         } elseif (trim($remote_state['status']) == 'processing') {
-            $payment = $payment_storage->create([
-                'state' => 'authorization',
-                'amount' => $order->getBalance(),
-                'payment_gateway' => $this->parentEntity->id(),
-                'order_id' => $order->id(),
-                'remote_id' => $request->query->get('paynet-order-id'),
-                'remote_state' => trim($remote_state['status']),
-            ]);
-            $message = $this->t('Your payment with Order id : @orderid is pending at : @date', ['@orderid' => $order->id(), '@date' => date("d-m-Y H:i:s", $requestTime)]);
+            // "processing" is not a final PaynetEasy status: do not record a
+            // payment and do not let checkout place the order on it.
+            \Drupal::messenger()->addWarning($this->t('Your payment with Order id : @orderid is still being processed. Please wait a few minutes before trying again to avoid a duplicate charge.', ['@orderid' => $order->id()]));
+            throw new PaymentGatewayException('PaynetEasy payment for order ' . $order->id() . ' is still processing.');
         } else {
             $payment = $payment_storage->create([
                 'state' => 'authorization',
