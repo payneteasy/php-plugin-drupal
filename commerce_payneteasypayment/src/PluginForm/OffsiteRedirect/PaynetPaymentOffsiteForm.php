@@ -206,7 +206,7 @@ class PaynetPaymentOffsiteForm extends BasePaymentOffsiteForm
         $this->logger = $logger
             ->setOption('showBacktrace', true)
             ->setOption('maskSensitiveData', true)
-            ->setLogFilePath(dirname(__DIR__, 3) . '/logs/payneteasy-' . date('d-m-Y') . '.log')
+            ->setLogFilePath(PaynetEasyLogger::getLogDirectory() . '/payneteasy-' . date('d-m-Y') . '.log')
             ->setCustomRecording(function($message) use ($logger) {
                 if ($this->logging)
                     $logger->writeToFile($message);

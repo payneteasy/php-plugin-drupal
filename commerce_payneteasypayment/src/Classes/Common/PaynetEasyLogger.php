@@ -3,6 +3,7 @@
 namespace Drupal\commerce_payneteasypayment\Classes\Common;
 
 use Drupal\commerce_payneteasypayment\Classes\Exception\PaynetEasyException;
+use Drupal\Core\File\FileSystemInterface;
 
 class PaynetEasyLogger
 {
@@ -11,6 +12,11 @@ class PaynetEasyLogger
      */
     const LOG_LEVEL_DEBUG = 'DEBUG';
     const LOG_LEVEL_ERROR = 'ERROR';
+
+    /**
+     * Context keys whose values must never be written to the log.
+     */
+    const SENSITIVE_KEYS = ['credit_card_number', 'card_number', 'number', 'cvv2', 'cvv', 'security_code', 'control_key'];
 
     /**
      * @var string The path to the log file.
@@ -60,6 +66,24 @@ class PaynetEasyLogger
 
 
     /**
+     * Get the log directory, outside the web root.
+     *
+     * Uses private://payneteasy when the private file system is configured,
+     * temporary://payneteasy otherwise.
+     *
+     * @return string The log directory URI.
+     */
+    public static function getLogDirectory(): string
+    {
+        $scheme = \Drupal::service('stream_wrapper_manager')->isValidScheme('private') ? 'private' : 'temporary';
+        $directory = $scheme . '://payneteasy';
+        \Drupal::service('file_system')->prepareDirectory($directory, FileSystemInterface::CREATE_DIRECTORY | FileSystemInterface::MODIFY_PERMISSIONS);
+
+        return $directory;
+    }
+
+
+    /**
      * Set the log file path.
      *
      * @param string $filePath The path to the log file.
@@ -69,7 +93,7 @@ class PaynetEasyLogger
     public function setLogFilePath(string $filePath = ''): self
     {
         if (empty($filePath)) {
-            $filePath = dirname(__DIR__, 3) . '/logs/payneteasy.log';
+            $filePath = self::getLogDirectory() . '/payneteasy.log';
         }
         $this->logFilePath = $filePath;
         $this->createLogDirectory();
@@ -177,14 +201,41 @@ class PaynetEasyLogger
             $resultMessage .= (string) $this->options['additionalCommonText'] . ' ';
         }
 
-        $resultMessage .= $message;
+        $resultMessage .= $this->maskSensitiveData($message);
 
         if (!empty($context) && is_array($context)) {
+            $context = $this->maskSensitiveData($context);
             $resultMessage .= ' Context: ' . PHP_EOL;
             $resultMessage .= $this->options['prepareAsJson'] ? json_encode($context, JSON_UNESCAPED_UNICODE) : print_r($context, true);
         }
 
         return $resultMessage;
+    }
+
+
+    /**
+     * Mask card data (PAN, CVV) and secrets before they reach the log.
+     *
+     * @param mixed $data The message or context data.
+     *
+     * @return mixed The masked data.
+     */
+    private function maskSensitiveData($data)
+    {
+        if (is_array($data)) {
+            foreach ($data as $key => $value) {
+                if (is_string($key) && in_array(strtolower($key), self::SENSITIVE_KEYS, true)) {
+                    $data[$key] = '***';
+                } else {
+                    $data[$key] = $this->maskSensitiveData($value);
+                }
+            }
+        } elseif (is_string($data)) {
+            // Anything that looks like a card number keeps only BIN and last 4.
+            $data = preg_replace('/\b(\d{6})\d{3,9}(\d{4})\b/', '$1******$2', $data);
+        }
+
+        return $data;
     }
 
 

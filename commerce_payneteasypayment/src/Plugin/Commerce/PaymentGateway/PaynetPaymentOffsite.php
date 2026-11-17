@@ -85,7 +85,7 @@ class PaynetpaymentOffsite extends OffsitePaymentGatewayBase
                 'login' => '',
                 'control_key' => '',
                 'endpoint_id' => '',
-                'logging' => true,
+                'logging' => false,
                 'live_url' => '',
                 'sandbox_url' => '',
             ] + parent::defaultConfiguration();
@@ -129,7 +129,7 @@ class PaynetpaymentOffsite extends OffsitePaymentGatewayBase
         $form['logging'] = [
             '#title' => $this->t('Logging'),
             '#description' => $this->t('Logging is used to debug plugin performance by storing API request data.'),
-            '#default_value' => $this->configuration['logging'] ?: true,
+            '#default_value' => $this->configuration['logging'] ? 1 : 0,
             '#type' => 'radios',
             '#options' =>  [
                 true => 'Enable',
@@ -356,7 +356,7 @@ class PaynetpaymentOffsite extends OffsitePaymentGatewayBase
         $this->logger = $logger
             ->setOption('showBacktrace', true)
             ->setOption('maskSensitiveData', true)
-            ->setLogFilePath(dirname(__DIR__, 4) . '/logs/payneteasy-' . date('d-m-Y') . '.log')
+            ->setLogFilePath(PaynetEasyLogger::getLogDirectory() . '/payneteasy-' . date('d-m-Y') . '.log')
             ->setCustomRecording(function($message) use ($logger) {
                 if ($this->logging)
                     $logger->writeToFile($message);
