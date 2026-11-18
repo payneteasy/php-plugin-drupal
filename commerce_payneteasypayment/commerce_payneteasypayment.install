@@ -1,0 +1,41 @@
+<?php
+
+/**
+ * @file
+ * Install hooks for the PaynetEasy payment module.
+ */
+
+/**
+ * Implements hook_schema().
+ */
+function commerce_payneteasypayment_schema() {
+    $schema['payneteasy_payments'] = [
+        'description' => 'PaynetEasy payments',
+        'fields' => [
+            'merchant_order_id' => [
+                'description' => 'merchant_order_id',
+                'type' => 'int',
+                'not null' => TRUE,
+            ],
+            'paynet_order_id' => [
+                'description' => 'paynet_order_id',
+                'type' => 'int',
+                'not null' => TRUE,
+            ],
+        ],
+        'primary key' => ['merchant_order_id'],
+    ];
+    return $schema;
+}
+
+/**
+ * Create the payneteasy_payments table missing on sites installed with hook_schema() in the .module file.
+ */
+function commerce_payneteasypayment_update_10101() {
+    $schema = \Drupal::database()->schema();
+    foreach (commerce_payneteasypayment_schema() as $table => $definition) {
+        if (!$schema->tableExists($table)) {
+            $schema->createTable($table, $definition);
+        }
+    }
+}

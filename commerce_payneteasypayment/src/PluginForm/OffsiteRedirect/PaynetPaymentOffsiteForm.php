@@ -91,9 +91,11 @@ class PaynetPaymentOffsiteForm extends BasePaymentOffsiteForm
         $amount = $order->getTotalPrice() ? number_format($order->getTotalPrice()->getNumber(),2,'.','') : 0;
 //        $return_url = $form['#return_url'];
 //        $cancel_url = $form['#cancel_url'];
-        $success_url = \Drupal::request()->getSchemeAndHttpHost().'/checkout/'.$orderId.'/complete';
-        $return_url = \Drupal::request()->getSchemeAndHttpHost().'/checkout/'.$orderId.'/payment/return';
-        $cancel_url = \Drupal::request()->getSchemeAndHttpHost().'/checkout/'.$orderId.'/payment/cancel';
+        // The customer comes back through a public route that re-issues the
+        // request as GET, so the guest session cookie is sent (see ReturnController).
+        $return_url = \Drupal\Core\Url::fromRoute('commerce_payneteasypayment.return', ['commerce_order' => $orderId], ['absolute' => TRUE])->toString();
+        // The gateway's server-to-server callback has no session: send it to the notify route.
+        $notify_url = $plugin->getNotifyUrl()->toString();
 
         $test_mode = true;
         if (isset($configuration['mode']) && $configuration['mode'] == 'live')
@@ -143,7 +145,7 @@ class PaynetPaymentOffsiteForm extends BasePaymentOffsiteForm
             'redirect_success_url' => $return_url,
             'redirect_fail_url' => $return_url,
             'redirect_url' => $return_url,
-            'server_callback_url' => $return_url,
+            'server_callback_url' => $notify_url,
         ];
         $data['control'] = $this->signPaymentRequest($data, $configuration['endpoint_id'], $configuration['control_key']);
 
