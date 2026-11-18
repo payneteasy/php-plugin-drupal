@@ -85,7 +85,7 @@ class PaynetpaymentOffsite extends OffsitePaymentGatewayBase
                 'login' => '',
                 'control_key' => '',
                 'endpoint_id' => '',
-                'logging' => true,
+                'logging' => false,
                 'live_url' => '',
                 'sandbox_url' => '',
             ] + parent::defaultConfiguration();
@@ -129,7 +129,7 @@ class PaynetpaymentOffsite extends OffsitePaymentGatewayBase
         $form['logging'] = [
             '#title' => $this->t('Logging'),
             '#description' => $this->t('Logging is used to debug plugin performance by storing API request data.'),
-            '#default_value' => $this->configuration['logging'] ?: true,
+            '#default_value' => $this->configuration['logging'] ? 1 : 0,
             '#type' => 'radios',
             '#options' =>  [
                 true => 'Enable',
@@ -201,7 +201,24 @@ class PaynetpaymentOffsite extends OffsitePaymentGatewayBase
     public function onReturn(OrderInterface $order, Request $request) {
         $this->setPayneteasyLogger();
         $this->logger->setOption('additionalCommonText', 'onReturn-' . rand(1111, 9999));
-        $remote_state = $this->getPaymentStatus($order->id());
+
+        // Only handle orders paid through this gateway, and never touch an
+        // order that is already paid (no duplicate or downgrading payments).
+        if ($order->get('payment_gateway')->target_id != $this->parentEntity->id()) {
+            throw new PaymentGatewayException('Order ' . $order->id() . ' does not use this PaynetEasy gateway.');
+        }
+        if ($order->isPaid()) {
+            return;
+        }
+
+        try {
+            $remote_state = $this->getPaymentStatus($order->id());
+        } catch (PaynetEasyException $e) {
+            throw new PaymentGatewayException('PaynetEasy status request failed for order ' . $order->id() . '.');
+        }
+        if (isset($remote_state['merchant-order-id']) && (string) $remote_state['merchant-order-id'] !== (string) $order->id()) {
+            throw new PaymentGatewayException('PaynetEasy status does not match order ' . $order->id() . '.');
+        }
         $payment_storage = $this->entityTypeManager->getStorage('commerce_payment');
         $requestTime = $this->time->getRequestTime();
         $message = '';
@@ -212,27 +229,22 @@ class PaynetpaymentOffsite extends OffsitePaymentGatewayBase
                 'amount' => $order->getBalance(),
                 'payment_gateway' => $this->parentEntity->id(),
                 'order_id' => $order->id(),
-                'remote_id' => $request->query->get('paynet-order-id'),
+                'remote_id' => $remote_state['paynet-order-id'] ?? '',
                 'remote_state' => trim($remote_state['status']),
             ]);
             $message = $this->t('Your payment was successful with Order id : @orderid has been received at : @date', ['@orderid' => $order->id(), '@date' => date("d-m-Y H:i:s", $requestTime)]);
         } elseif (trim($remote_state['status']) == 'processing') {
-            $payment = $payment_storage->create([
-                'state' => 'authorization',
-                'amount' => $order->getBalance(),
-                'payment_gateway' => $this->parentEntity->id(),
-                'order_id' => $order->id(),
-                'remote_id' => $request->query->get('paynet-order-id'),
-                'remote_state' => trim($remote_state['status']),
-            ]);
-            $message = $this->t('Your payment with Order id : @orderid is pending at : @date', ['@orderid' => $order->id(), '@date' => date("d-m-Y H:i:s", $requestTime)]);
+            // "processing" is not a final PaynetEasy status: do not record a
+            // payment and do not let checkout place the order on it.
+            \Drupal::messenger()->addWarning($this->t('Your payment with Order id : @orderid is still being processed. Please wait a few minutes before trying again to avoid a duplicate charge.', ['@orderid' => $order->id()]));
+            throw new PaymentGatewayException('PaynetEasy payment for order ' . $order->id() . ' is still processing.');
         } else {
             $payment = $payment_storage->create([
                 'state' => 'authorization',
                 'amount' => $order->getBalance(),
                 'payment_gateway' => $this->parentEntity->id(),
                 'order_id' => $order->id(),
-                'remote_id' => $request->query->get('paynet-order-id'),
+                'remote_id' => $remote_state['paynet-order-id'] ?? '',
                 'remote_state' => trim($remote_state['status']),
             ]);
             $message = $this->t('Your payment with Order id : @orderid failed at : @date', ['@orderid' => $order->id(), '@date' => date("d-m-Y H:i:s", $requestTime)]);
@@ -344,7 +356,7 @@ class PaynetpaymentOffsite extends OffsitePaymentGatewayBase
         $this->logger = $logger
             ->setOption('showBacktrace', true)
             ->setOption('maskSensitiveData', true)
-            ->setLogFilePath(dirname(__DIR__, 4) . '/logs/payneteasy-' . date('d-m-Y') . '.log')
+            ->setLogFilePath(PaynetEasyLogger::getLogDirectory() . '/payneteasy-' . date('d-m-Y') . '.log')
             ->setCustomRecording(function($message) use ($logger) {
                 if ($this->logging)
                     $logger->writeToFile($message);

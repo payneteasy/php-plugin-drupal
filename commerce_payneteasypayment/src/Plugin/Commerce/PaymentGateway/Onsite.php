@@ -8,6 +8,7 @@ use Drupal\commerce_payment\CreditCard;
 use Drupal\commerce_payment\Entity\PaymentInterface;
 use Drupal\commerce_payment\Entity\PaymentMethodInterface;
 use Drupal\commerce_payment\Exception\HardDeclineException;
+use Drupal\commerce_payment\Exception\PaymentGatewayException;
 use Drupal\commerce_payment\PaymentMethodTypeManager;
 use Drupal\commerce_payment\PaymentTypeManager;
 use Drupal\commerce_payment\Plugin\Commerce\PaymentGateway\OnsitePaymentGatewayBase;
@@ -94,7 +95,7 @@ class Onsite extends OnsitePaymentGatewayBase implements OnsiteInterface
                 'login' => '',
                 'control_key' => '',
                 'endpoint_id' => '',
-                'logging' => true,
+                'logging' => false,
                 'three_d_secure' => false,
                 'live_url' => '',
                 'sandbox_url' => '',
@@ -139,7 +140,7 @@ class Onsite extends OnsitePaymentGatewayBase implements OnsiteInterface
         $form['logging'] = [
             '#title' => $this->t('Logging'),
             '#description' => $this->t('Logging is used to debug plugin performance by storing API request data.'),
-            '#default_value' => $this->configuration['logging'] ?: true,
+            '#default_value' => $this->configuration['logging'] ? 1 : 0,
             '#type' => 'radios',
             '#options' =>  [
                 true => 'Enable',
@@ -306,15 +307,28 @@ class Onsite extends OnsitePaymentGatewayBase implements OnsiteInterface
         $order = $payment->getOrder();
         $orderId = $order->id();
 
-        $status = $this->getPaymentStatus($orderId);
+        try {
+            $status = $this->getPaymentStatus($orderId);
+        } catch (PaynetEasyException $e) {
+            throw new PaymentGatewayException('The payment could not be processed. Please try again or use another payment method.');
+        }
+        $remoteStatus = trim($status['status'] ?? '');
 
-        if (trim($status['status']) == 'processing') {
-            $payment->setState('authorization');
-            if ($this->configuration['three_d_secure']) {
+        if ($remoteStatus == 'processing') {
+            // "processing" is not a final PaynetEasy status: never let checkout
+            // place the order on it. The customer may resubmit once the gateway
+            // reports a final status.
+            if ($this->configuration['three_d_secure'] && !empty($status['html'])) {
                 echo $status['html'];
             }
-        } elseif (trim($status['status']) == 'approved') {
+            \Drupal::messenger()->addWarning($this->t('Your payment is still being processed. Please wait a moment and submit your order again without re-entering your card details.'));
+            throw new PaymentGatewayException('PaynetEasy payment for order ' . $orderId . ' is still processing.');
+        } elseif ($remoteStatus == 'approved') {
             $payment->setState('completed');
+        } elseif (in_array($remoteStatus, ['declined', 'filtered'], true)) {
+            throw new HardDeclineException('The payment was declined. Please use another payment method.');
+        } else {
+            throw new PaymentGatewayException('The payment could not be processed. Please try again or use another payment method.');
         }
         $payment->setRemoteId($status['paynet-order-id']);
         $payment->setAvsResponseCode('A');
@@ -325,7 +339,7 @@ class Onsite extends OnsitePaymentGatewayBase implements OnsiteInterface
     /**
      * {@inheritdoc}
      */
-    public function capturePayment(PaymentInterface $payment, Price $amount = NULL)
+    public function capturePayment(PaymentInterface $payment, ?Price $amount = NULL)
     {
         $this->assertPaymentState($payment, ['authorization']);
         $amount = $amount ?: $payment->getAmount();
@@ -354,7 +368,7 @@ class Onsite extends OnsitePaymentGatewayBase implements OnsiteInterface
     /**
      * {@inheritdoc}
      */
-    public function refundPayment(PaymentInterface $payment, Price $amount = NULL)
+    public function refundPayment(PaymentInterface $payment, ?Price $amount = NULL)
     {
         $this->setPayneteasyLogger();
         $this->logger->setOption('additionalCommonText', 'refundPayment-' . rand(1111, 9999));
@@ -542,7 +556,7 @@ class Onsite extends OnsitePaymentGatewayBase implements OnsiteInterface
         $this->logger = $logger
             ->setOption('showBacktrace', true)
             ->setOption('maskSensitiveData', true)
-            ->setLogFilePath(dirname(__DIR__, 4) . '/logs/payneteasy-' . date('d-m-Y') . '.log')
+            ->setLogFilePath(PaynetEasyLogger::getLogDirectory() . '/payneteasy-' . date('d-m-Y') . '.log')
             ->setCustomRecording(function($message) use ($logger) {
                 if ($this->configuration['logging'] == '1')
                     $logger->writeToFile($message);
