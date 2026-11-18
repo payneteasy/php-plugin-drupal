@@ -17,6 +17,7 @@ use Drupal\commerce_payneteasypayment\Classes\Api\PaynetApi;
 use Drupal\commerce_payneteasypayment\Classes\Common\PaynetEasyLogger;
 use Drupal\commerce_payneteasypayment\Classes\Exception\PaynetEasyException;
 use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\HttpFoundation\Response;
 
 /**
  * Provides the Off-site Paynet payment gateway.
@@ -262,7 +263,55 @@ class PaynetpaymentOffsite extends OffsitePaymentGatewayBase
      */
     public function onNotify(Request $request)
     {
-        parent::onNotify($request);
+        $this->setPayneteasyLogger();
+        $this->logger->setOption('additionalCommonText', 'onNotify-' . rand(1111, 9999));
+
+        $orderId = (string) ($request->get('client_orderid') ?? $request->get('merchant_order') ?? '');
+        if (!ctype_digit($orderId)) {
+            return new Response('Bad request', 400);
+        }
+        /** @var \Drupal\commerce_order\Entity\OrderInterface|null $order */
+        $order = $this->entityTypeManager->getStorage('commerce_order')->load($orderId);
+        if (!$order || $order->get('payment_gateway')->target_id != $this->parentEntity->id()) {
+            return new Response('Unknown order', 404);
+        }
+        if ($order->isPaid()) {
+            return new Response('OK');
+        }
+
+        // Never trust the callback parameters: ask the gateway for the status.
+        try {
+            $remote_state = $this->getPaymentStatus($order->id());
+        } catch (\Throwable $e) {
+            $this->logger->error('Status request failed for order ' . $order->id() . ': ' . $e->getMessage());
+            return new Response('Status request failed', 503);
+        }
+        if (isset($remote_state['merchant-order-id']) && (string) $remote_state['merchant-order-id'] !== (string) $order->id()) {
+            return new Response('Order mismatch', 409);
+        }
+
+        if (($remote_state['status'] ?? '') === 'approved') {
+            $this->entityTypeManager->getStorage('commerce_payment')->create([
+                'state' => 'completed',
+                'amount' => $order->getBalance(),
+                'payment_gateway' => $this->parentEntity->id(),
+                'order_id' => $order->id(),
+                'remote_id' => $remote_state['paynet-order-id'] ?? '',
+                'remote_state' => 'approved',
+            ])->save();
+
+            // The customer may never come back to the site: place the order here.
+            $state = $order->getState();
+            if ($state->getId() === 'draft' && in_array('place', array_keys($state->getTransitions()), TRUE)) {
+                $state->applyTransitionById('place');
+                $order->unlock();
+                $order->set('checkout_step', 'complete');
+                $order->save();
+            }
+            $this->logger->debug('Order ' . $order->id() . ' paid via server callback');
+        }
+
+        return new Response('OK');
     }
 
 

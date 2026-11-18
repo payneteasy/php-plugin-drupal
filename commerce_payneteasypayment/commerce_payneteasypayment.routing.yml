@@ -1,0 +1,12 @@
+commerce_payneteasypayment.return:
+  path: '/payneteasy/return/{commerce_order}'
+  defaults:
+    _controller: '\Drupal\commerce_payneteasypayment\Controller\ReturnController::redirectToCheckout'
+  requirements:
+    _access: 'TRUE'
+    commerce_order: '\d+'
+  options:
+    parameters:
+      commerce_order:
+        type: entity:commerce_order
+    no_cache: TRUE
