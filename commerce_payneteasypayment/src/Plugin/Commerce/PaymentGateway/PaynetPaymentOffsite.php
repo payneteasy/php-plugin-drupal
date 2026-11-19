@@ -276,6 +276,9 @@ class PaynetpaymentOffsite extends OffsitePaymentGatewayBase
             return new Response('Unknown order', 404);
         }
         if ($order->isPaid()) {
+            // Paid in full (e.g. by an earlier partial payment and this one):
+            // make sure the order is placed even if the customer never returns.
+            $this->placePaidOrder($order);
             return new Response('OK');
         }
 
@@ -297,13 +300,7 @@ class PaynetpaymentOffsite extends OffsitePaymentGatewayBase
             }
 
             // The customer may never come back to the site: place the order here.
-            $state = $order->getState();
-            if ($state->getId() === 'draft' && in_array('place', array_keys($state->getTransitions()), TRUE)) {
-                $state->applyTransitionById('place');
-                $order->unlock();
-                $order->set('checkout_step', 'complete');
-                $order->save();
-            }
+            $this->placePaidOrder($order);
             $this->logger->debug('Order ' . $order->id() . ' paid via server callback');
         }
 
@@ -342,6 +339,12 @@ class PaynetpaymentOffsite extends OffsitePaymentGatewayBase
         $paid    = new Price($amount, $currency);
         $balance = $order->getBalance();
 
+        // A payment in another currency cannot be added to the order.
+        if (!$balance || $balance->getCurrencyCode() !== $currency) {
+            $this->logger->error('Order ' . $order->id() . ': paid currency ' . $currency . ' does not match the order');
+            return FALSE;
+        }
+
         $payment_storage->create([
             'state' => 'completed',
             'amount' => $paid,
@@ -351,7 +354,21 @@ class PaynetpaymentOffsite extends OffsitePaymentGatewayBase
             'remote_state' => 'approved',
         ])->save();
 
-        return $balance && $paid->equals($balance);
+        // Paid in full when the payment covers what was due before it.
+        return $paid->greaterThanOrEqual($balance);
+    }
+
+    /**
+     * Places a draft order that is paid in full, as checkout would.
+     */
+    private function placePaidOrder(OrderInterface $order): void {
+        $state = $order->getState();
+        if ($state->getId() === 'draft' && in_array('place', array_keys($state->getTransitions()), TRUE)) {
+            $state->applyTransitionById('place');
+            $order->unlock();
+            $order->set('checkout_step', 'complete');
+            $order->save();
+        }
     }
 
     /**
@@ -420,7 +437,7 @@ class PaynetpaymentOffsite extends OffsitePaymentGatewayBase
         $base = '';
         $base .= $endpointId;
         $base .= $data['client_orderid'];
-        $base .= $data['amount'] * 100;
+        $base .= (int) round($data['amount'] * 100);
         $base .= $data['email'];
 
         return $this->signString($base, $merchantControl);
