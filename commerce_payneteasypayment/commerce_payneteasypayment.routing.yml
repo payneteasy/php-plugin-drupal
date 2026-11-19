@@ -1,7 +1,7 @@
 commerce_payneteasypayment.return:
   path: '/payneteasy/return/{commerce_order}'
   defaults:
-    _controller: '\Drupal\commerce_payneteasypayment\Controller\ReturnController::redirectToCheckout'
+    _controller: '\Drupal\commerce_payneteasypayment\Controller\ReturnController::handle'
   requirements:
     _access: 'TRUE'
     commerce_order: '\d+'

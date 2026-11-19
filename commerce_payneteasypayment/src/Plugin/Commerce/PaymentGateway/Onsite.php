@@ -209,7 +209,9 @@ class Onsite extends OnsitePaymentGatewayBase implements OnsiteInterface
     {
         $orderId = $order->id();
         $email = $order->getEmail();
-        $amount = $order->getTotalPrice() ? number_format($order->getTotalPrice()->getNumber(),2,'.','') : 0;
+        // Charge what is still due: after a partial payment the balance, not the total.
+        $due = $order->getBalance() ?: $order->getTotalPrice();
+        $amount = $due ? number_format((float) $due->getNumber(), 2, '.', '') : 0;
 
         $success_url = \Drupal::request()->getSchemeAndHttpHost().'/checkout/'.$orderId.'/complete';
         $return_url = \Drupal::request()->getSchemeAndHttpHost().'/checkout/'.$orderId.'/payment/return';
@@ -243,7 +245,7 @@ class Onsite extends OnsitePaymentGatewayBase implements OnsiteInterface
             'client_orderid' => (string)$orderId,
             'order_desc' => 'Order # ' . $orderId,
             'amount' => $amount,
-            'currency' => $order->getTotalprice()->getCurrencyCode(),
+            'currency' => $due->getCurrencyCode(),
             'address1' => $address['address_line1'],
             'city' => $address['locality'],
             'zip_code' => $address['postal_code'],
@@ -385,30 +387,69 @@ class Onsite extends OnsitePaymentGatewayBase implements OnsiteInterface
         // If not specified, refund the entire amount.
         $amount = $amount ?: $payment->getAmount();
         $this->assertRefundAmount($payment, $amount);
-        $order = $payment->getOrder();
-        $orderId = $order->id();
-        $remoteId = $payment->getRemoteId();
+        $orderId = (string) $payment->getOrderId();
+        $remoteId = (string) $payment->getRemoteId();
+        $value = number_format((float) $amount->getNumber(), 2, '.', '');
+        $currency = $amount->getCurrencyCode();
+
         $data = [
             'login' => $this->configuration['login'],
             'client_orderid' => $orderId,
             'orderid' => $remoteId,
-            'comment' => 'Order cancel '
+            'amount' => $value,
+            'currency' => $currency,
+            'comment' => 'Refund',
         ];
-
-        $data['control'] = $this->signPaymentRequest($data, $this->configuration['endpoint_id'], $this->configuration['control_key']);
-
-        $paynetApi = new PaynetApi();
+        $data['control'] = $this->signString(
+            $data['login'] . $orderId . $remoteId . (int) round($value * 100) . $currency,
+            $this->configuration['control_key']
+        );
 
         $action_url = $this->configuration['live_url'];
         if ($this->configuration['mode'] == 'test')
             $action_url = $this->configuration['sandbox_url'];
+
+        $paynetApi = new PaynetApi();
+
+        try {
+            $response = $paynetApi->return($data, $action_url, $this->configuration['endpoint_id']);
+        } catch (PaynetEasyException $e) {
+            $this->logger->error('Refund request failed for order ' . $orderId . ': ' . $e->getMessage());
+            throw new PaymentGatewayException('The refund could not be sent to PaynetEasy. Please try again later.');
+        }
+
+        if (in_array(trim($response['type'] ?? ''), ['error', 'validation-error'], TRUE) || trim($response['status'] ?? '') === 'error') {
+            $this->logger->error('Refund refused for order ' . $orderId . ': ' . trim($response['error-message'] ?? ''));
+            throw new PaymentGatewayException('PaynetEasy refused the refund: ' . trim($response['error-message'] ?? 'unknown error'));
+        }
+
+        // The refund is processed asynchronously: wait briefly for the final answer.
+        $final = '';
+        for ($i = 0; $i < 5; $i++) {
+            try {
+                $status = $this->getPaymentStatus($orderId, $remoteId);
+            } catch (PaynetEasyException $e) {
+                break;
+            }
+            $final = trim($status['status'] ?? '');
+            if ($final !== 'processing') {
+                break;
+            }
+            sleep(1);
+        }
+        if (in_array($final, ['declined', 'error', 'filtered'], TRUE)) {
+            $this->logger->error('Refund declined for order ' . $orderId . ': ' . trim($status['error-message'] ?? ''));
+            throw new PaymentGatewayException('PaynetEasy declined the refund: ' . trim($status['error-message'] ?? $final));
+        }
+        if ($final === 'processing') {
+            $this->logger->warning('Refund for order ' . $orderId . ' is still processing at PaynetEasy');
+        }
 
         $old_refunded_amount = $payment->getRefundedAmount();
         $new_refunded_amount = $old_refunded_amount->add($amount);
         if ($new_refunded_amount->lessThan($payment->getAmount())) {
             $payment->setState('partially_refunded');
         } else {
-            $paynetApi->return($data, $action_url, $this->configuration['endpoint_id']);
             $payment->setState('refunded');
         }
 
@@ -480,12 +521,14 @@ class Onsite extends OnsitePaymentGatewayBase implements OnsiteInterface
      * @param string $orderId - ID заказа
      * @return array
      */
-    private function getPaymentStatus(string $orderId): array
+    private function getPaymentStatus(string $orderId, ?string $paynetOrderId = NULL): array
     {
-        $query = \Drupal::database()->select('payneteasy_payments', 'pp');
-        $query->addField('pp', 'paynet_order_id');
-        $query->condition('pp.merchant_order_id', $orderId);
-        $paynetOrderId = $query->execute()->fetchField();
+        if ($paynetOrderId === NULL) {
+            $query = \Drupal::database()->select('payneteasy_payments', 'pp');
+            $query->addField('pp', 'paynet_order_id');
+            $query->condition('pp.merchant_order_id', $orderId);
+            $paynetOrderId = $query->execute()->fetchField();
+        }
 
         $data = [
             'login' => $this->login,
@@ -541,7 +584,7 @@ class Onsite extends OnsitePaymentGatewayBase implements OnsiteInterface
         $base = '';
         $base .= $endpointId;
         $base .= $data['client_orderid'];
-        $base .= $data['amount'] * 100;
+        $base .= (int) round($data['amount'] * 100);
         $base .= $data['email'];
 
         return $this->signString($base, $merchantControl);

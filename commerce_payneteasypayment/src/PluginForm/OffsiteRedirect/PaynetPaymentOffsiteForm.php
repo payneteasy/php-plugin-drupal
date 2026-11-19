@@ -88,7 +88,9 @@ class PaynetPaymentOffsiteForm extends BasePaymentOffsiteForm
         $plugin = $payment->getPaymentGateway()->getPlugin();
         $configuration = $plugin->getConfiguration();
         $email = $order->getEmail();
-        $amount = $order->getTotalPrice() ? number_format($order->getTotalPrice()->getNumber(),2,'.','') : 0;
+        // Charge what is still due: after a partial payment the balance, not the total.
+        $due = $order->getBalance() ?: $order->getTotalPrice();
+        $amount = $due ? number_format((float) $due->getNumber(), 2, '.', '') : 0;
 //        $return_url = $form['#return_url'];
 //        $cancel_url = $form['#cancel_url'];
         // The customer comes back through a public route that re-issues the
@@ -126,7 +128,7 @@ class PaynetPaymentOffsiteForm extends BasePaymentOffsiteForm
             'client_orderid' => (string)$orderId,
             'order_desc' => 'Order # ' . $orderId,
             'amount' => $amount,
-            'currency' => $order->getTotalprice()->getCurrencyCode(),
+            'currency' => $due->getCurrencyCode(),
             'address1' => $address[0]['address_line1'],
             'city' => $address[0]['locality'],
             'zip_code' => $address[0]['postal_code'],
@@ -184,7 +186,7 @@ class PaynetPaymentOffsiteForm extends BasePaymentOffsiteForm
         $base = '';
         $base .= $endpointId;
         $base .= $data['client_orderid'];
-        $base .= $data['amount'] * 100;
+        $base .= (int) round($data['amount'] * 100);
         $base .= $data['email'];
 
         return $this->signString($base, $merchantControl);
