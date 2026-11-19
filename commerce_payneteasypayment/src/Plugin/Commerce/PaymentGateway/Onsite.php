@@ -324,6 +324,15 @@ class Onsite extends OnsitePaymentGatewayBase implements OnsiteInterface
             \Drupal::messenger()->addWarning($this->t('Your payment is still being processed. Please wait a moment and submit your order again without re-entering your card details.'));
             throw new PaymentGatewayException('PaynetEasy payment for order ' . $orderId . ' is still processing.');
         } elseif ($remoteStatus == 'approved') {
+            // The gateway amount must match the payment: the order may have been
+            // changed after the sale was sent.
+            $amount   = trim((string) ($status['amount'] ?? ''));
+            $currency = strtoupper(trim((string) ($status['currency'] ?? '')));
+            if (!preg_match('/^\d+(\.\d{1,2})?$/', $amount) || !preg_match('/^[A-Z]{3}$/', $currency)
+                || !(new Price($amount, $currency))->equals($payment->getAmount())) {
+                $this->logger->error('Order ' . $orderId . ': paid amount does not match the order total');
+                throw new PaymentGatewayException('The paid amount does not match the order total. Please contact the store.');
+            }
             $payment->setState('completed');
         } elseif (in_array($remoteStatus, ['declined', 'filtered'], true)) {
             throw new HardDeclineException('The payment was declined. Please use another payment method.');
