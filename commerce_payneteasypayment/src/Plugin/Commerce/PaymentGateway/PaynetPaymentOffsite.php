@@ -12,6 +12,7 @@ use Drupal\commerce_payment\Plugin\Commerce\PaymentGateway\OffsitePaymentGateway
 use Drupal\commerce_payment\Plugin\Commerce\PaymentGateway\SupportsNotificationsInterface;
 use Drupal\commerce_payment\PaymentMethodTypeManager;
 use Drupal\commerce_payment\PaymentTypeManager;
+use Drupal\commerce_price\Price;
 use Drupal\Component\Datetime\TimeInterface;
 use Drupal\commerce_payneteasypayment\Classes\Api\PaynetApi;
 use Drupal\commerce_payneteasypayment\Classes\Common\PaynetEasyLogger;
@@ -225,15 +226,14 @@ class PaynetpaymentOffsite extends OffsitePaymentGatewayBase
         $message = '';
 
         if (trim($remote_state['status']) == 'approved') {
-            $payment = $payment_storage->create([
-                'state' => 'completed',
-                'amount' => $order->getBalance(),
-                'payment_gateway' => $this->parentEntity->id(),
-                'order_id' => $order->id(),
-                'remote_id' => $remote_state['paynet-order-id'] ?? '',
-                'remote_state' => trim($remote_state['status']),
-            ]);
-            $message = $this->t('Your payment was successful with Order id : @orderid has been received at : @date', ['@orderid' => $order->id(), '@date' => date("d-m-Y H:i:s", $requestTime)]);
+            $paid = $this->recordApprovedPayment($order, $remote_state);
+            if (!$paid) {
+                // The order was changed after the payment was started
+                \Drupal::messenger()->addError($this->t('The paid amount does not match the order total. Please contact the store.'));
+                throw new PaymentGatewayException('PaynetEasy paid amount does not match order ' . $order->id() . '.');
+            }
+            \Drupal::messenger()->addMessage($this->t('Your payment was successful with Order id : @orderid has been received at : @date', ['@orderid' => $order->id(), '@date' => date("d-m-Y H:i:s", $requestTime)]));
+            return;
         } elseif (trim($remote_state['status']) == 'processing') {
             // "processing" is not a final PaynetEasy status: do not record a
             // payment and do not let checkout place the order on it.
@@ -291,14 +291,10 @@ class PaynetpaymentOffsite extends OffsitePaymentGatewayBase
         }
 
         if (($remote_state['status'] ?? '') === 'approved') {
-            $this->entityTypeManager->getStorage('commerce_payment')->create([
-                'state' => 'completed',
-                'amount' => $order->getBalance(),
-                'payment_gateway' => $this->parentEntity->id(),
-                'order_id' => $order->id(),
-                'remote_id' => $remote_state['paynet-order-id'] ?? '',
-                'remote_state' => 'approved',
-            ])->save();
+            if (!$this->recordApprovedPayment($order, $remote_state)) {
+                $this->logger->error('Order ' . $order->id() . ': paid amount does not match the order total');
+                return new Response('OK');
+            }
 
             // The customer may never come back to the site: place the order here.
             $state = $order->getState();
@@ -314,6 +310,49 @@ class PaynetpaymentOffsite extends OffsitePaymentGatewayBase
         return new Response('OK');
     }
 
+
+    /**
+     * Records the approved gateway payment with the amount actually paid.
+     *
+     * @param \Drupal\commerce_order\Entity\OrderInterface $order
+     * @param array $remote_state Gateway status response.
+     * @return bool TRUE if the order balance is paid in full.
+     */
+    private function recordApprovedPayment(OrderInterface $order, array $remote_state): bool {
+        $amount   = trim((string) ($remote_state['amount'] ?? ''));
+        $currency = strtoupper(trim((string) ($remote_state['currency'] ?? '')));
+        $remoteId = (string) ($remote_state['paynet-order-id'] ?? '');
+
+        if (!preg_match('/^\d+(\.\d{1,2})?$/', $amount) || !preg_match('/^[A-Z]{3}$/', $currency)) {
+            $this->logger->error('Order ' . $order->id() . ': no amount in the gateway status');
+            return FALSE;
+        }
+
+        $payment_storage = $this->entityTypeManager->getStorage('commerce_payment');
+
+        // One payment per gateway transaction: a repeated return or callback only
+        // reports whether the order is paid in full, it adds no payment.
+        if ($remoteId !== '' && $payment_storage->loadByProperties([
+            'order_id' => $order->id(),
+            'remote_id' => $remoteId,
+        ])) {
+            return $order->isPaid();
+        }
+
+        $paid    = new Price($amount, $currency);
+        $balance = $order->getBalance();
+
+        $payment_storage->create([
+            'state' => 'completed',
+            'amount' => $paid,
+            'payment_gateway' => $this->parentEntity->id(),
+            'order_id' => $order->id(),
+            'remote_id' => $remoteId,
+            'remote_state' => 'approved',
+        ])->save();
+
+        return $balance && $paid->equals($balance);
+    }
 
     /**
      * Получение статуса заказа из Paynet API.
