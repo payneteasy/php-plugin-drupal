@@ -20,6 +20,8 @@ function commerce_payneteasypayment_schema() {
             'paynet_order_id' => [
                 'description' => 'paynet_order_id',
                 'type' => 'int',
+                'size' => 'big',
+                'unsigned' => TRUE,
                 'not null' => TRUE,
             ],
         ],
@@ -37,5 +39,16 @@ function commerce_payneteasypayment_update_10101() {
         if (!$schema->tableExists($table)) {
             $schema->createTable($table, $definition);
         }
+    }
+}
+
+/**
+ * Widen paynet_order_id: gateway ids do not fit into int.
+ */
+function commerce_payneteasypayment_update_10102() {
+    $schema = \Drupal::database()->schema();
+    if ($schema->tableExists('payneteasy_payments')) {
+        $schema->changeField('payneteasy_payments', 'paynet_order_id', 'paynet_order_id',
+            commerce_payneteasypayment_schema()['payneteasy_payments']['fields']['paynet_order_id']);
     }
 }
