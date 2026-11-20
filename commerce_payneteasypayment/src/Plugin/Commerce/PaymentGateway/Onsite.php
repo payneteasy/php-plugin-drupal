@@ -286,11 +286,10 @@ class Onsite extends OnsitePaymentGatewayBase implements OnsiteInterface
         ]);
 
         if (isset($response['paynet-order-id'])) {
-            $query = \Drupal::database()->upsert('payneteasy_payments');
-            $query->fields(['merchant_order_id', 'paynet_order_id']);
-            $query->values([$response['merchant-order-id'], $response['paynet-order-id']]);
-            $query->key('merchant_order_id');
-            $query->execute();
+            // Every attempt is kept: the customer may pay in an older tab
+            \Drupal::database()->insert('payneteasy_payments')
+                ->fields(['merchant_order_id' => (int) $response['merchant-order-id'], 'paynet_order_id' => trim((string) $response['paynet-order-id'])])
+                ->execute();
         }
 
         return $response;
@@ -524,9 +523,12 @@ class Onsite extends OnsitePaymentGatewayBase implements OnsiteInterface
     private function getPaymentStatus(string $orderId, ?string $paynetOrderId = NULL): array
     {
         if ($paynetOrderId === NULL) {
+            // The latest attempt: the one this payment has just sent
             $query = \Drupal::database()->select('payneteasy_payments', 'pp');
             $query->addField('pp', 'paynet_order_id');
             $query->condition('pp.merchant_order_id', $orderId);
+            $query->orderBy('pp.id', 'DESC');
+            $query->range(0, 1);
             $paynetOrderId = $query->execute()->fetchField();
         }
 

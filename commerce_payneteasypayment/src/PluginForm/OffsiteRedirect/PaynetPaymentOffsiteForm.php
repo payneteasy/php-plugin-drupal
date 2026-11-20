@@ -170,11 +170,10 @@ class PaynetPaymentOffsiteForm extends BasePaymentOffsiteForm
         ]);
 
         if (isset($response['paynet-order-id'])) {
-            $query = \Drupal::database()->upsert('payneteasy_payments');
-            $query->fields(['merchant_order_id', 'paynet_order_id']);
-            $query->values([$response['merchant-order-id'], $response['paynet-order-id']]);
-            $query->key('merchant_order_id');
-            $query->execute();
+            // Every attempt is kept: the customer may pay in an older tab
+            \Drupal::database()->insert('payneteasy_payments')
+                ->fields(['merchant_order_id' => (int) $response['merchant-order-id'], 'paynet_order_id' => trim((string) $response['paynet-order-id'])])
+                ->execute();
         }
 
         return $response;
