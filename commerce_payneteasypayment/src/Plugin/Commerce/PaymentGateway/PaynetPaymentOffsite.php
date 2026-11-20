@@ -378,46 +378,78 @@ class PaynetpaymentOffsite extends OffsitePaymentGatewayBase
      */
     private function getPaymentStatus(string $orderId): array
     {
+        // All attempts of the order, newest first (the customer may pay in an older tab).
+        // Preferred: an approved attempt not recorded yet, then a processing one,
+        // then an approved one already recorded, otherwise the latest attempt.
         $query = \Drupal::database()->select('payneteasy_payments', 'pp');
         $query->addField('pp', 'paynet_order_id');
         $query->condition('pp.merchant_order_id', $orderId);
-        $paynetOrderId = $query->execute()->fetchField();
+        $query->orderBy('pp.id', 'DESC');
+        $query->range(0, 20);
+        $attempts = $query->execute()->fetchCol() ?: [''];
 
-        $data = [
-            'login' => $this->login,
-            'client_orderid' => $orderId,
-            'orderid' => $paynetOrderId,
-        ];
-        $data['control'] = $this->signStatusRequest($data, $this->login, $this->control_key);
-        
         $action_url = $this->live_url;
         if ($this->test_mode)
             $action_url = $this->sandbox_url;
 
-        // Logging input
-        $this->logger->debug(
-            __FUNCTION__ . ' > status - INPUT: ', [
-            'arguments' => [
-                'client_orderid' => $orderId,
-                'paynetOrderId' => $paynetOrderId
-            ]
-        ]);
-
+        $payment_storage = $this->entityTypeManager->getStorage('commerce_payment');
         $paynetApi = new PaynetApi();
+        $latest = $processing = $recorded = NULL;
 
-        $response = $paynetApi->status(
-            $data,
-            $action_url,
-            $this->endpoint_id
-        );
+        foreach ($attempts as $paynetOrderId) {
+            $data = [
+                'login' => $this->login,
+                'client_orderid' => $orderId,
+                'orderid' => $paynetOrderId,
+            ];
+            $data['control'] = $this->signStatusRequest($data, $this->login, $this->control_key);
 
-        // Logging output
-        $this->logger->debug(
-            __FUNCTION__ . ' > status - OUTPUT: ', [
-            'response' => $response
-        ]);
+            // Logging input
+            $this->logger->debug(
+                __FUNCTION__ . ' > status - INPUT: ', [
+                'arguments' => [
+                    'client_orderid' => $orderId,
+                    'paynetOrderId' => $paynetOrderId
+                ]
+            ]);
 
-        return $response;
+            $response = $paynetApi->status(
+                $data,
+                $action_url,
+                $this->endpoint_id
+            );
+
+            // Logging output
+            $this->logger->debug(
+                __FUNCTION__ . ' > status - OUTPUT: ', [
+                'response' => $response
+            ]);
+
+            // The gateway answers for any transaction id: use only answers for this order
+            if (isset($response['merchant-order-id']) && trim((string) $response['merchant-order-id']) !== (string) $orderId) {
+                continue;
+            }
+
+            $status = trim((string) ($response['status'] ?? ''));
+            if ($status === 'approved') {
+                $isRecorded = $payment_storage->loadByProperties([
+                    'order_id' => $orderId,
+                    'remote_id' => trim((string) ($response['paynet-order-id'] ?? '')),
+                ]);
+                if (!$isRecorded) {
+                    return $response;
+                }
+                $recorded = $recorded ?? $response;
+            }
+            if ($status === 'processing' && $processing === NULL) {
+                $processing = $response;
+            }
+            if ($latest === NULL) {
+                $latest = $response;
+            }
+        }
+
+        return $processing ?? $recorded ?? $latest ?? [];
     }
 
 

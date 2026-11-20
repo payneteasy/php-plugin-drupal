@@ -12,6 +12,12 @@ function commerce_payneteasypayment_schema() {
     $schema['payneteasy_payments'] = [
         'description' => 'PaynetEasy payments',
         'fields' => [
+            'id' => [
+                'description' => 'Payment attempt id',
+                'type' => 'serial',
+                'unsigned' => TRUE,
+                'not null' => TRUE,
+            ],
             'merchant_order_id' => [
                 'description' => 'merchant_order_id',
                 'type' => 'int',
@@ -25,7 +31,10 @@ function commerce_payneteasypayment_schema() {
                 'not null' => TRUE,
             ],
         ],
-        'primary key' => ['merchant_order_id'],
+        'primary key' => ['id'],
+        'indexes' => [
+            'merchant_order_id' => ['merchant_order_id'],
+        ],
     ];
     return $schema;
 }
@@ -50,5 +59,23 @@ function commerce_payneteasypayment_update_10102() {
     if ($schema->tableExists('payneteasy_payments')) {
         $schema->changeField('payneteasy_payments', 'paynet_order_id', 'paynet_order_id',
             commerce_payneteasypayment_schema()['payneteasy_payments']['fields']['paynet_order_id']);
+    }
+}
+
+/**
+ * Keep every payment attempt of an order: one row per attempt, not per order.
+ */
+function commerce_payneteasypayment_update_10103() {
+    $schema = \Drupal::database()->schema();
+    if ($schema->tableExists('payneteasy_payments') && !$schema->fieldExists('payneteasy_payments', 'id')) {
+        $schema->dropPrimaryKey('payneteasy_payments');
+        $schema->addField('payneteasy_payments', 'id', [
+            'description' => 'Payment attempt id',
+            'type' => 'serial',
+            'unsigned' => TRUE,
+            'not null' => TRUE,
+        ], ['primary key' => ['id']]);
+        $schema->addIndex('payneteasy_payments', 'merchant_order_id', ['merchant_order_id'],
+            commerce_payneteasypayment_schema()['payneteasy_payments']);
     }
 }
