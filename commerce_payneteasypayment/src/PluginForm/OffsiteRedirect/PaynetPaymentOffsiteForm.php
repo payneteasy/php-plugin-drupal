@@ -25,10 +25,10 @@ class PaynetPaymentOffsiteForm extends BasePaymentOffsiteForm
 
 
     /**
-     * Формирует запрос и перенаправление на платежную страница.
-     * @param array $form - массив формы оплаты
-     * @param object $form_state - объект формы оплаты
-     * @return array|null Массив, содержащий результат и URL перенаправления, или null, если произошла ошибка.
+     * Builds the request and the redirect to the payment page.
+     * @param array $form - payment form array
+     * @param object $form_state - payment form state
+     * @return array|null Array with the result and the redirect URL, or null on an error.
      */
     public function buildConfigurationForm(array $form, FormStateInterface $form_state) {
         $form = parent::buildConfigurationForm($form, $form_state);
@@ -76,8 +76,8 @@ class PaynetPaymentOffsiteForm extends BasePaymentOffsiteForm
 
 
     /**
-     * Получает URL-адрес платежа для перенаправления.
-     * @param array $form - массив формы оплаты для получения адреса возврата
+     * Gets the payment URL for the redirect.
+     * @param array $form - payment form array, used to get the return URL
      * @return array
      */
     private function getPaymentUrl(array $form): array
@@ -199,8 +199,8 @@ class PaynetPaymentOffsiteForm extends BasePaymentOffsiteForm
 
 
     /**
-     * Инициализация и настройка объекта класса PaynetEasyLogger.
-     * Эта функция инициализирует и настраивает логгер, используемый плагином PaynetEasy для ведения журнала.
+     * Creates and configures the PaynetEasyLogger object.
+     * This function sets up the logger the PaynetEasy plugin writes its log with.
      * @return void
      */
     private function setPayneteasyLogger(): void

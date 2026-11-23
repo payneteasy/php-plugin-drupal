@@ -78,8 +78,8 @@ class PaynetpaymentOffsite extends OffsitePaymentGatewayBase
 
 
     /**
-     * Дефолтные значения формы настроек модуля.
-     * @return array - возвращает дефолные значения
+     * Default values of the module settings form.
+     * @return array - the default values
      */
     public function defaultConfiguration()
     {
@@ -95,9 +95,9 @@ class PaynetpaymentOffsite extends OffsitePaymentGatewayBase
 
 
     /**
-     * Создание формы настроек модуля.
-     * @param array $form - массив параметров настроек
-     * @param object $form_state - объект формы настроек
+     * Builds the module settings form.
+     * @param array $form - settings form array
+     * @param object $form_state - settings form state
      * @return void
      */
     public function buildConfigurationForm(array $form, FormStateInterface $form_state)
@@ -158,9 +158,9 @@ class PaynetpaymentOffsite extends OffsitePaymentGatewayBase
 
 
     /**
-     * Сохранение параметров настроек модуля.
-     * @param array $form - массив параметров настроек
-     * @param object $form_state - объект формы настроек
+     * Saves the module settings.
+     * @param array $form - settings form array
+     * @param object $form_state - settings form state
      * @return void
      */
     public function submitConfigurationForm(array &$form, FormStateInterface $form_state)
@@ -180,10 +180,10 @@ class PaynetpaymentOffsite extends OffsitePaymentGatewayBase
 
 
     /**
-     * Обработчик cancel, вызываемый при переходе на страницу cancel_url, после попытки оплаты.
-     * Показывает сообщение что заказ был отклонен
-     * @param object $order - объект заказа
-     * @param object $request - объект запроса к странице возврата
+     * Handler for cancel_url, called after a payment attempt.
+     * Shows a message that the payment was declined
+     * @param object $order - order object
+     * @param object $request - request to the return page
      * @return void
      */
     public function onCancel(OrderInterface $order, Request $request) {
@@ -194,10 +194,10 @@ class PaynetpaymentOffsite extends OffsitePaymentGatewayBase
 
 
     /**
-     * Обработчик return, вызываемый при переходе на страницу return_url, после попытки оплаты.
-     * Добавляет информацию о платеже в заказ
-     * @param object $order - объект заказа
-     * @param object $request - объект запроса к странице возврата
+     * Handler for return_url, called after a payment attempt.
+     * Adds the payment data to the order
+     * @param object $order - order object
+     * @param object $request - request to the return page
      * @return void
      */
     public function onReturn(OrderInterface $order, Request $request) {
@@ -256,10 +256,10 @@ class PaynetpaymentOffsite extends OffsitePaymentGatewayBase
     }
 
     /**
-     * Обработчик notify, вызываемый в качестве вебхука, после попытки оплаты.
-     * Может использоваться при возврате платежа
-     * @param object $request - объект запроса к вебхуку
-     * @return string добавляет статус ответа
+     * Handler for notify, called as a webhook after a payment attempt.
+     * Can be used for a refund
+     * @param object $request - webhook request
+     * @return string response status
      */
     public function onNotify(Request $request)
     {
@@ -372,8 +372,8 @@ class PaynetpaymentOffsite extends OffsitePaymentGatewayBase
     }
 
     /**
-     * Получение статуса заказа из Paynet API.
-     * @param string $orderId - ID заказа
+     * Gets the order status from the Paynet API.
+     * @param string $orderId - order ID
      * @return array
      */
     private function getPaymentStatus(string $orderId): array
@@ -483,8 +483,8 @@ class PaynetpaymentOffsite extends OffsitePaymentGatewayBase
 
 
     /**
-     * Инициализация и настройка объекта класса PaynetEasyLogger.
-     * Эта функция инициализирует и настраивает логгер, используемый плагином PaynetEasy для ведения журнала.
+     * Creates and configures the PaynetEasyLogger object.
+     * This function sets up the logger the PaynetEasy plugin writes its log with.
      * @return void
      */
     private function setPayneteasyLogger(): void

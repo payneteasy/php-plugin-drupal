@@ -86,8 +86,8 @@ class Onsite extends OnsitePaymentGatewayBase implements OnsiteInterface
 
 
     /**
-     * Дефолтные значения формы настроек модуля.
-     * @return array - возвращает дефолные значения
+     * Default values of the module settings form.
+     * @return array - the default values
      */
     public function defaultConfiguration()
     {
@@ -104,9 +104,9 @@ class Onsite extends OnsitePaymentGatewayBase implements OnsiteInterface
 
 
     /**
-     * Создание формы настроек модуля.
-     * @param array $form - массив параметров настроек
-     * @param object $form_state - объект формы настроек
+     * Builds the module settings form.
+     * @param array $form - settings form array
+     * @param object $form_state - settings form state
      * @return void
      */
     public function buildConfigurationForm(array $form, FormStateInterface $form_state)
@@ -178,9 +178,9 @@ class Onsite extends OnsitePaymentGatewayBase implements OnsiteInterface
 
 
     /**
-     * Сохранение параметров настроек модуля.
-     * @param array $form - массив параметров настроек
-     * @param object $form_state - объект формы настроек
+     * Saves the module settings.
+     * @param array $form - settings form array
+     * @param object $form_state - settings form state
      * @return void
      */
     public function submitConfigurationForm(array &$form, FormStateInterface $form_state)
@@ -201,8 +201,8 @@ class Onsite extends OnsitePaymentGatewayBase implements OnsiteInterface
 
 
     /**
-     * Получает данные о платеже.
-     * @param $payment - объект оплаты
+     * Gets the payment data.
+     * @param $payment - payment object
      * @return array
      */
     private function getPaynetPayment($order,$address,$payment_details): array
@@ -516,8 +516,8 @@ class Onsite extends OnsitePaymentGatewayBase implements OnsiteInterface
 
 
     /**
-     * Получение статуса заказа из Paynet API.
-     * @param string $orderId - ID заказа
+     * Gets the order status from the Paynet API.
+     * @param string $orderId - order ID
      * @return array
      */
     private function getPaymentStatus(string $orderId, ?string $paynetOrderId = NULL): array
@@ -600,8 +600,8 @@ class Onsite extends OnsitePaymentGatewayBase implements OnsiteInterface
 
 
     /**
-     * Инициализация и настройка объекта класса PaynetEasyLogger.
-     * Эта функция инициализирует и настраивает логгер, используемый плагином PaynetEasy для ведения журнала.
+     * Creates and configures the PaynetEasyLogger object.
+     * This function sets up the logger the PaynetEasy plugin writes its log with.
      * @return void
      */
     private function setPayneteasyLogger(): void
