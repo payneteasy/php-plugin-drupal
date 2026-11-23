@@ -325,37 +325,80 @@ class PaynetpaymentOffsite extends OffsitePaymentGatewayBase
             return FALSE;
         }
 
-        $payment_storage = $this->entityTypeManager->getStorage('commerce_payment');
-
-        // One payment per gateway transaction: a repeated return or callback only
-        // reports whether the order is paid in full, it adds no payment.
-        if ($remoteId !== '' && $payment_storage->loadByProperties([
-            'order_id' => $order->id(),
-            'remote_id' => $remoteId,
-        ])) {
-            return $order->isPaid();
+        // The customer return and the server callback may arrive at the same
+        // time: the check and the save of the payment run under a lock, so
+        // that only one of them records the gateway transaction.
+        $lock = \Drupal::lock();
+        $lockName = 'commerce_payneteasypayment:order:' . $order->id();
+        if (!$lock->acquire($lockName, 30.0)) {
+            $lock->wait($lockName, 30);
+            if (!$lock->acquire($lockName, 30.0)) {
+                $this->logger->error('Order ' . $order->id() . ': the payment is being recorded by another request');
+                return FALSE;
+            }
         }
 
-        $paid    = new Price($amount, $currency);
-        $balance = $order->getBalance();
+        try {
+            $payment_storage = $this->entityTypeManager->getStorage('commerce_payment');
 
-        // A payment in another currency cannot be added to the order.
-        if (!$balance || $balance->getCurrencyCode() !== $currency) {
-            $this->logger->error('Order ' . $order->id() . ': paid currency ' . $currency . ' does not match the order');
+            // One payment per gateway transaction: a repeated return or callback only
+            // reports whether the order is paid in full, it adds no payment.
+            if ($remoteId !== '' && $payment_storage->loadByProperties([
+                'order_id' => $order->id(),
+                'remote_id' => $remoteId,
+            ])) {
+                return $this->isPaidByPayments($order);
+            }
+
+            $paid    = new Price($amount, $currency);
+            $balance = $order->getBalance();
+
+            // A payment in another currency cannot be added to the order.
+            if (!$balance || $balance->getCurrencyCode() !== $currency) {
+                $this->logger->error('Order ' . $order->id() . ': paid currency ' . $currency . ' does not match the order');
+                return FALSE;
+            }
+
+            $payment_storage->create([
+                'state' => 'completed',
+                'amount' => $paid,
+                'payment_gateway' => $this->parentEntity->id(),
+                'order_id' => $order->id(),
+                'remote_id' => $remoteId,
+                'remote_state' => 'approved',
+            ])->save();
+
+            // Paid in full when the payment covers what was due before it.
+            return $paid->greaterThanOrEqual($balance);
+        }
+        finally {
+            $lock->release($lockName);
+        }
+    }
+
+    /**
+     * TRUE if the saved payments of the order cover its total.
+     *
+     * The paid total of the order entity is updated only at the end of the
+     * request that saved a payment, so a concurrent request reads the payments.
+     */
+    private function isPaidByPayments(OrderInterface $order): bool {
+        $total = $order->getTotalPrice();
+        if (!$total) {
             return FALSE;
         }
 
-        $payment_storage->create([
-            'state' => 'completed',
-            'amount' => $paid,
-            'payment_gateway' => $this->parentEntity->id(),
-            'order_id' => $order->id(),
-            'remote_id' => $remoteId,
-            'remote_state' => 'approved',
-        ])->save();
+        $paid = new Price('0', $total->getCurrencyCode());
+        $payments = $this->entityTypeManager->getStorage('commerce_payment')->loadMultipleByOrder($order);
+        foreach ($payments as $payment) {
+            if (!in_array($payment->getState()->getId(), ['completed', 'partially_refunded'], TRUE)
+                || $payment->getAmount()->getCurrencyCode() !== $total->getCurrencyCode()) {
+                continue;
+            }
+            $paid = $paid->add($payment->getAmount())->subtract($payment->getRefundedAmount() ?: new Price('0', $total->getCurrencyCode()));
+        }
 
-        // Paid in full when the payment covers what was due before it.
-        return $paid->greaterThanOrEqual($balance);
+        return $paid->greaterThanOrEqual($total);
     }
 
     /**

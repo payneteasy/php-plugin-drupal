@@ -51,11 +51,7 @@ class PaynetPaymentOffsiteForm extends BasePaymentOffsiteForm
                 $this->test_mode = false;
 
             $redirectUrl = $this->getPaymentUrl($form);
-            if (isset($redirectUrl['error-message']))
-                \Drupal::messenger()->addError($redirectUrl['error-message']);
-            else
-                return $this->buildRedirectForm($form, $form_state, $redirectUrl['redirect-url'], [], self::REDIRECT_GET);
-        } catch (Exception | PaynetEasyException $e) {
+        } catch (\Exception $e) {
             // Handle exception and log error
             $context = [
                 'file_exception' => $e->getFile(),
@@ -69,9 +65,16 @@ class PaynetPaymentOffsiteForm extends BasePaymentOffsiteForm
                 $orderId ?: ''
             ), $context);
             \Drupal::messenger()->addError($e->getMessage());
-            return null;
+            return $form;
         }
 
+        if (empty($redirectUrl['redirect-url'])) {
+            \Drupal::messenger()->addError($redirectUrl['error-message'] ?? t('The payment could not be started. Please try again.'));
+            return $form;
+        }
+
+        // Outside the try block: the redirect is done by an exception of Commerce
+        return $this->buildRedirectForm($form, $form_state, $redirectUrl['redirect-url'], [], self::REDIRECT_GET);
   }
 
 
