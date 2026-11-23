@@ -4,6 +4,7 @@ namespace Drupal\commerce_payneteasypayment\Plugin\Commerce\PaymentGateway;
 
 require __DIR__ . '/../../../../vendor/autoload.php';
 
+use Drupal\commerce_order\Entity\OrderInterface;
 use Drupal\commerce_payment\CreditCard;
 use Drupal\commerce_payment\Entity\PaymentInterface;
 use Drupal\commerce_payment\Entity\PaymentMethodInterface;
@@ -208,7 +209,7 @@ class Onsite extends OnsitePaymentGatewayBase implements OnsiteInterface
     private function getPaynetPayment($order,$address,$payment_details): array
     {
         $orderId = $order->id();
-        $email = $order->getEmail();
+        $email = $this->getCustomerEmail($order);
         // Charge what is still due: after a partial payment the balance, not the total.
         $due = $order->getBalance() ?: $order->getTotalPrice();
         $amount = $due ? number_format((float) $due->getNumber(), 2, '.', '') : 0;
@@ -251,7 +252,7 @@ class Onsite extends OnsitePaymentGatewayBase implements OnsiteInterface
             'zip_code' => $address['postal_code'],
             'country' => $address['country_code'],
             'phone'      => '',
-            'email'      => $order->getEmail(),
+            'email'      => $email,
             'ipaddress' => $order->getIpAddress()??$_SERVER['REMOTE_ADDR'],
             'cvv2' => $card_data['cvv2'],
             'credit_card_number' => $card_data['credit_card_number'],
@@ -472,7 +473,12 @@ class Onsite extends OnsitePaymentGatewayBase implements OnsiteInterface
             }
         }
 
+        // A card is charged only for an order in checkout: a card added from the
+        // customer account has no order to pay.
         $order = \Drupal::routeMatch()->getParameter('commerce_order');
+        if (!$order instanceof OrderInterface) {
+            throw new PaymentGatewayException('A card can be added only during checkout.');
+        }
 
         $address = [];
         if ($payment_method->getBillingProfile() != NULL) {
@@ -482,7 +488,41 @@ class Onsite extends OnsitePaymentGatewayBase implements OnsiteInterface
             }
         }
 
-        $this->getPaynetPayment($order,$address,$payment_details);
+        try {
+            $response = $this->getPaynetPayment($order, $address, $payment_details);
+        } catch (PaynetEasyException $e) {
+            $this->logger->error('Sale request failed for order ' . $order->id() . ': ' . $e->getMessage());
+            throw new PaymentGatewayException('The payment could not be processed. Please try again or use another payment method.');
+        }
+
+        // The gateway did not accept the sale: stop here, not at the payment step
+        if (empty($response['paynet-order-id'])) {
+            $this->logger->error('Sale refused for order ' . $order->id() . ': '
+                . trim((string) ($response['error-message'] ?? $response['type'] ?? 'no response')));
+            throw new PaymentGatewayException('The payment could not be processed. Please try again or use another payment method.');
+        }
+    }
+
+    /**
+     * Customer email for the sale request.
+     *
+     * In checkout the payment method is created before the contact information
+     * pane copies the guest email to the order, so the submitted value is used.
+     */
+    private function getCustomerEmail($order): string
+    {
+        $email = (string) $order->getEmail();
+        if ($email === '') {
+            $contact = \Drupal::request()->request->all()['contact_information'] ?? [];
+            $posted = is_array($contact) ? trim((string) ($contact['email'] ?? '')) : '';
+            if (filter_var($posted, FILTER_VALIDATE_EMAIL)) {
+                $email = $posted;
+            }
+        }
+        if ($email === '' && $order->getCustomer() && !$order->getCustomer()->isAnonymous()) {
+            $email = (string) $order->getCustomer()->getEmail();
+        }
+        return $email;
     }
 
     /**
