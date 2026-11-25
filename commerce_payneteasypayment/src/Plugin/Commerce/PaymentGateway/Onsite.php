@@ -441,8 +441,11 @@ class Onsite extends OnsitePaymentGatewayBase implements OnsiteInterface
             $this->logger->error('Refund declined for order ' . $orderId . ': ' . trim($status['error-message'] ?? ''));
             throw new PaymentGatewayException('PaynetEasy declined the refund: ' . trim($status['error-message'] ?? $final));
         }
-        if ($final === 'processing') {
-            $this->logger->warning('Refund for order ' . $orderId . ' is still processing at PaynetEasy');
+        if ($final !== 'approved') {
+            // The gateway accepted the request, so the refund is recorded: a second
+            // attempt would send a second refund. The final result is not known yet.
+            $this->logger->error('Refund for order ' . $orderId . ' is not confirmed yet, status: ' . ($final !== '' ? $final : 'unknown'));
+            \Drupal::messenger()->addWarning($this->t('PaynetEasy accepted the refund but has not confirmed it yet. Check its final status in the PaynetEasy account before refunding again.'));
         }
 
         $old_refunded_amount = $payment->getRefundedAmount();
