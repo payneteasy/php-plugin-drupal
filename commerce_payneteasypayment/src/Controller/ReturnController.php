@@ -41,6 +41,9 @@ class ReturnController {
         // Card payment: the server callback has its own address and no session.
         // It is answered at once, because the gateway may not follow a redirect.
         if ($onsite && $request->query->get('callback')) {
+            if (!$this->mayAskGateway($commerce_order, $request)) {
+                return new Response('Too many requests', 429);
+            }
             try {
                 $onsite->completeFromGateway($commerce_order);
             }
@@ -66,6 +69,9 @@ class ReturnController {
             if ($payment_step->access()) {
                 return new RedirectResponse($payment_step->toString(), 303);
             }
+            if (!$this->mayAskGateway($commerce_order, $request)) {
+                return $this->neutralPage();
+            }
             try {
                 $onsite->completeFromGateway($commerce_order);
             }
@@ -83,7 +89,7 @@ class ReturnController {
             return new RedirectResponse($checkout->toString(), 303);
         }
 
-        if ($gateway && $gateway->getPlugin() instanceof PaynetpaymentOffsite) {
+        if ($gateway && $gateway->getPlugin() instanceof PaynetpaymentOffsite && $this->mayAskGateway($commerce_order, $request)) {
             try {
                 $gateway->getPlugin()->onNotify(new Request(['client_orderid' => (string) $commerce_order->id()]));
             }
@@ -125,6 +131,23 @@ class ReturnController {
             'Content-Type' => 'text/html; charset=UTF-8',
             'Cache-Control' => 'no-store, private',
         ]);
+    }
+
+    /**
+     * Limits the gateway requests that anyone can cause without a checkout
+     * session: per order and per client address.
+     */
+    private function mayAskGateway(OrderInterface $order, Request $request): bool {
+        $flood = \Drupal::flood();
+        $byOrder = 'order:' . $order->id();
+        $byClient = 'ip:' . $request->getClientIp();
+        if (!$flood->isAllowed('commerce_payneteasypayment.status', 20, 600, $byOrder)
+            || !$flood->isAllowed('commerce_payneteasypayment.status', 60, 600, $byClient)) {
+            return FALSE;
+        }
+        $flood->register('commerce_payneteasypayment.status', 600, $byOrder);
+        $flood->register('commerce_payneteasypayment.status', 600, $byClient);
+        return TRUE;
     }
 
     /**

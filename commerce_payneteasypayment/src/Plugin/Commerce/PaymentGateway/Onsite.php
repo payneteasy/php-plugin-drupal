@@ -258,7 +258,7 @@ class Onsite extends OnsitePaymentGatewayBase implements OnsiteInterface
             'ipaddress' => $order->getIpAddress()??$_SERVER['REMOTE_ADDR'],
             'cvv2' => $card_data['cvv2'],
             'credit_card_number' => $card_data['credit_card_number'],
-            'card_printed_name' => $address['given_name'] . ' ' . $address['family_name'],
+            'card_printed_name' => trim($address['given_name'] . ' ' . $address['family_name']),
             'expire_month' => $card_data['expire_month'],
             'expire_year' => $card_data['expire_year'],
             'first_name' => $address['given_name'],
@@ -509,12 +509,17 @@ class Onsite extends OnsitePaymentGatewayBase implements OnsiteInterface
             throw new PaymentGatewayException('A card can be added only during checkout.');
         }
 
+        // The card is not stored at the gateway: it cannot be offered again as a saved card
+        $payment_method->setReusable(FALSE);
+
+        // Billing information is optional: the address may be missing
         $address = [];
-        if ($payment_method->getBillingProfile() != NULL) {
-            if ($billing_profile = $payment_method->getBillingProfile()) {
-                $billing_address = $billing_profile->get('address')->first();
-                $address = $billing_address->getValue();
-            }
+        $billing_profile = $payment_method->getBillingProfile();
+        if ($billing_profile && !$billing_profile->get('address')->isEmpty()) {
+            $address = $billing_profile->get('address')->first()->getValue();
+        }
+        foreach (['address_line1', 'locality', 'postal_code', 'country_code', 'given_name', 'family_name'] as $key) {
+            $address[$key] = (string) ($address[$key] ?? '');
         }
 
         // A card submitted again must not send a second sale while the previous

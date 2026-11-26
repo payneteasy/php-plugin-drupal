@@ -106,13 +106,23 @@ class PaynetPaymentOffsiteForm extends BasePaymentOffsiteForm
         if (isset($configuration['mode']) && $configuration['mode'] == 'live')
             $test_mode = false;
 
+        // The shipping address if the order has one, else the billing address.
+        // An order may have neither (billing information is optional).
+        $address = [];
         if ($order->hasField('shipments') && !$order->get('shipments')->isEmpty() ) {
             $order_shipments = $order->get('shipments')->referencedEntities();
             $order_shipment = reset($order_shipments);
-            $shipment_profile = $order_shipment->getShippingProfile();
-            $address = $shipment_profile->address->getValue();
-        } else {
-            $address = $order->billing_profile->entity->address->getValue();
+            $shipment_profile = $order_shipment ? $order_shipment->getShippingProfile() : NULL;
+            if ($shipment_profile && !$shipment_profile->get('address')->isEmpty()) {
+                $address = $shipment_profile->get('address')->getValue();
+            }
+        }
+        if (!$address && ($billing_profile = $order->getBillingProfile()) && !$billing_profile->get('address')->isEmpty()) {
+            $address = $billing_profile->get('address')->getValue();
+        }
+        $address = [0 => $address[0] ?? []];
+        foreach (['address_line1', 'locality', 'postal_code', 'country_code', 'given_name', 'family_name'] as $key) {
+            $address[0][$key] = (string) ($address[0][$key] ?? '');
         }
 
         // Logging input
