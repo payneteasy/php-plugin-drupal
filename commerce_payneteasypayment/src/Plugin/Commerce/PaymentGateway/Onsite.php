@@ -18,6 +18,8 @@ use Drupal\commerce_price\Price;
 use Drupal\Component\Datetime\TimeInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Form\FormStateInterface;
+use Drupal\Core\Url;
+use Drupal\commerce\Response\NeedsRedirectException;
 use Drupal\commerce_payneteasypayment\Classes\Api\PaynetApi;
 use Drupal\commerce_payneteasypayment\Classes\Common\PaynetEasyLogger;
 use Drupal\commerce_payneteasypayment\Classes\Exception\PaynetEasyException;
@@ -214,9 +216,9 @@ class Onsite extends OnsitePaymentGatewayBase implements OnsiteInterface
         $due = $order->getBalance() ?: $order->getTotalPrice();
         $amount = $due ? number_format((float) $due->getNumber(), 2, '.', '') : 0;
 
-        $success_url = \Drupal::request()->getSchemeAndHttpHost().'/checkout/'.$orderId.'/complete';
-        $return_url = \Drupal::request()->getSchemeAndHttpHost().'/checkout/'.$orderId.'/payment/return';
-        $cancel_url = \Drupal::request()->getSchemeAndHttpHost().'/checkout/'.$orderId.'/payment/cancel';
+        // After 3-D Secure the customer and the server callback come to the route
+        // of the module: the checkout return route serves only off-site gateways.
+        $return_url = Url::fromRoute('commerce_payneteasypayment.return', ['commerce_order' => $orderId], ['absolute' => TRUE])->toString();
 
         // Logging input
         $this->logger->debug(
@@ -264,7 +266,8 @@ class Onsite extends OnsitePaymentGatewayBase implements OnsiteInterface
             'redirect_success_url' => $return_url,
             'redirect_fail_url' => $return_url,
             'redirect_url' => $return_url,
-            'server_callback_url' => $return_url,
+            // The server callback has no checkout session: it is answered at once
+            'server_callback_url' => $return_url . '?callback=1',
         ];
         $data['control'] = $this->signPaymentRequest($data, $this->configuration['endpoint_id'], $this->configuration['control_key']);
 
@@ -320,8 +323,10 @@ class Onsite extends OnsitePaymentGatewayBase implements OnsiteInterface
             // "processing" is not a final PaynetEasy status: never let checkout
             // place the order on it. The customer may resubmit once the gateway
             // reports a final status.
-            if ($this->configuration['three_d_secure'] && !empty($status['html'])) {
-                echo $status['html'];
+            if (!empty($status['html'])) {
+                // The bank asks for 3-D Secure: its page is shown by the module,
+                // the customer comes back to this step when it is passed.
+                throw new NeedsRedirectException(Url::fromRoute('commerce_payneteasypayment.three_d_secure', ['commerce_order' => $orderId], ['absolute' => TRUE])->toString());
             }
             \Drupal::messenger()->addWarning($this->t('Your payment is still being processed. Please wait a moment and submit your order again without re-entering your card details.'));
             throw new PaymentGatewayException('PaynetEasy payment for order ' . $orderId . ' is still processing.');
@@ -335,15 +340,36 @@ class Onsite extends OnsitePaymentGatewayBase implements OnsiteInterface
                 $this->logger->error('Order ' . $orderId . ': paid amount does not match the order total');
                 throw new PaymentGatewayException('The paid amount does not match the order total. Please contact the store.');
             }
-            $payment->setState('completed');
+            // The server callback may record this transaction at the same time:
+            // the check and the save run under the lock it uses.
+            $lock = \Drupal::lock();
+            $lockName = 'commerce_payneteasypayment:order:' . $orderId;
+            if (!$lock->acquire($lockName, 30.0)) {
+                $lock->wait($lockName, 30);
+                $lock->acquire($lockName, 30.0);
+            }
+            $remoteId = trim((string) ($status['paynet-order-id'] ?? ''));
+            if ($remoteId !== '' && $this->entityTypeManager->getStorage('commerce_payment')->loadByProperties([
+                'order_id' => $orderId,
+                'remote_id' => $remoteId,
+            ])) {
+                $lock->release($lockName);
+                return;
+            }
+            try {
+                $payment->setState('completed');
+                $payment->setRemoteId($status['paynet-order-id']);
+                $payment->setAvsResponseCode('A');
+                $payment->save();
+            } finally {
+                $lock->release($lockName);
+            }
+            return;
         } elseif (in_array($remoteStatus, ['declined', 'filtered'], true)) {
             throw new HardDeclineException('The payment was declined. Please use another payment method.');
         } else {
             throw new PaymentGatewayException('The payment could not be processed. Please try again or use another payment method.');
         }
-        $payment->setRemoteId($status['paynet-order-id']);
-        $payment->setAvsResponseCode('A');
-        $payment->save();
     }
 
 
@@ -491,6 +517,17 @@ class Onsite extends OnsitePaymentGatewayBase implements OnsiteInterface
             }
         }
 
+        // A card submitted again must not send a second sale while the previous
+        // one is in progress or approved and not recorded yet.
+        $previous = $this->getUnfinishedAttemptStatus($order);
+        if ($previous === 'approved') {
+            return;
+        }
+        if ($previous === 'processing') {
+            \Drupal::messenger()->addWarning($this->t('Your payment is still being processed. Please wait a moment and submit your order again without re-entering your card details.'));
+            throw new PaymentGatewayException('PaynetEasy payment for order ' . $order->id() . ' is still processing.');
+        }
+
         try {
             $response = $this->getPaynetPayment($order, $address, $payment_details);
         } catch (PaynetEasyException $e) {
@@ -503,6 +540,125 @@ class Onsite extends OnsitePaymentGatewayBase implements OnsiteInterface
             $this->logger->error('Sale refused for order ' . $order->id() . ': '
                 . trim((string) ($response['error-message'] ?? $response['type'] ?? 'no response')));
             throw new PaymentGatewayException('The payment could not be processed. Please try again or use another payment method.');
+        }
+    }
+
+    /**
+     * Status of the latest sale of the order if it is in progress, or approved
+     * and not recorded as a payment yet; an empty string otherwise.
+     */
+    private function getUnfinishedAttemptStatus(OrderInterface $order): string
+    {
+        $orderId = (string) $order->id();
+        $known = \Drupal::database()->select('payneteasy_payments', 'pp')
+            ->fields('pp', ['paynet_order_id'])
+            ->condition('pp.merchant_order_id', $orderId)
+            ->range(0, 1)->execute()->fetchField();
+        if (!$known) {
+            return '';
+        }
+        try {
+            $status = $this->getPaymentStatus($orderId);
+        } catch (\Throwable $e) {
+            return '';
+        }
+        $state = trim((string) ($status['status'] ?? ''));
+        if ($state === 'processing') {
+            return $state;
+        }
+        $remoteId = trim((string) ($status['paynet-order-id'] ?? ''));
+        if ($state === 'approved' && $remoteId !== '' && !$this->entityTypeManager->getStorage('commerce_payment')->loadByProperties([
+            'order_id' => $orderId,
+            'remote_id' => $remoteId,
+        ])) {
+            return $state;
+        }
+        return '';
+    }
+
+    /**
+     * The 3-D Secure page of the bank for the sale in progress, or an empty string.
+     */
+    public function getThreeDSecureHtml(OrderInterface $order): string
+    {
+        $this->setPayneteasyLogger();
+        try {
+            $status = $this->getPaymentStatus((string) $order->id());
+        } catch (\Throwable $e) {
+            return '';
+        }
+        return trim((string) ($status['status'] ?? '')) === 'processing' ? (string) ($status['html'] ?? '') : '';
+    }
+
+    /**
+     * Records an approved sale and places the order without the checkout session:
+     * for the server callback and for a customer who came back in another browser.
+     *
+     * Nothing from the request is used: the status is asked from the gateway.
+     */
+    public function completeFromGateway(OrderInterface $order): void
+    {
+        $this->setPayneteasyLogger();
+        $this->logger->setOption('additionalCommonText', 'completeFromGateway-' . rand(1111, 9999));
+        $orderId = (string) $order->id();
+
+        if ($order->getState()->getId() !== 'draft' || $order->get('payment_gateway')->target_id != $this->parentEntity->id()) {
+            return;
+        }
+        try {
+            $status = $this->getPaymentStatus($orderId);
+        } catch (\Throwable $e) {
+            return;
+        }
+        if (trim((string) ($status['status'] ?? '')) !== 'approved'
+            || (isset($status['merchant-order-id']) && trim((string) $status['merchant-order-id']) !== $orderId)) {
+            return;
+        }
+
+        $amount   = trim((string) ($status['amount'] ?? ''));
+        $currency = strtoupper(trim((string) ($status['currency'] ?? '')));
+        $remoteId = trim((string) ($status['paynet-order-id'] ?? ''));
+        $balance  = $order->getBalance();
+        if ($remoteId === '' || !$balance || !preg_match('/^\d+(\.\d{1,2})?$/', $amount) || !preg_match('/^[A-Z]{3}$/', $currency)
+            || !(new Price($amount, $currency))->equals($balance)) {
+            $this->logger->error('Order ' . $orderId . ': paid amount does not match the order total');
+            return;
+        }
+
+        // The customer return and the server callback may come together
+        $lock = \Drupal::lock();
+        $lockName = 'commerce_payneteasypayment:order:' . $orderId;
+        if (!$lock->acquire($lockName, 30.0)) {
+            $lock->wait($lockName, 30);
+            if (!$lock->acquire($lockName, 30.0)) {
+                return;
+            }
+        }
+        try {
+            $storage = $this->entityTypeManager->getStorage('commerce_payment');
+            if (!$storage->loadByProperties(['order_id' => $orderId, 'remote_id' => $remoteId])) {
+                $storage->create([
+                    'state' => 'completed',
+                    'amount' => new Price($amount, $currency),
+                    'payment_gateway' => $this->parentEntity->id(),
+                    'payment_method' => $order->get('payment_method')->target_id,
+                    'order_id' => $orderId,
+                    'remote_id' => $remoteId,
+                    'remote_state' => 'approved',
+                ])->save();
+            }
+
+            $order = $this->entityTypeManager->getStorage('commerce_order')->loadUnchanged($orderId);
+            $state = $order->getState();
+            if ($state->getId() === 'draft' && in_array('place', array_keys($state->getTransitions()), TRUE)) {
+                $state->applyTransitionById('place');
+                $order->unlock();
+                $order->set('checkout_step', 'complete');
+                $order->save();
+            }
+            $this->logger->debug('Order ' . $orderId . ' paid without the checkout session');
+        } finally {
+            $lock->release($lockName);
         }
     }
 

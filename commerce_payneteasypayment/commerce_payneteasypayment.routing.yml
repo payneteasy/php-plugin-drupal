@@ -10,3 +10,16 @@ commerce_payneteasypayment.return:
       commerce_order:
         type: entity:commerce_order
     no_cache: TRUE
+
+commerce_payneteasypayment.three_d_secure:
+  path: '/payneteasy/3ds/{commerce_order}'
+  defaults:
+    _controller: '\Drupal\commerce_payneteasypayment\Controller\ReturnController::threeDSecure'
+  requirements:
+    _access: 'TRUE'
+    commerce_order: '\d+'
+  options:
+    parameters:
+      commerce_order:
+        type: entity:commerce_order
+    no_cache: TRUE
